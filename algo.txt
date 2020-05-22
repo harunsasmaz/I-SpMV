@@ -1,0 +1,34 @@
+if rank is 0 {
+
+    read matrix
+    allocate rhs and res
+    init rhs
+    prepare process infos
+    partition of matrix
+
+}
+
+Scatter process info to all
+allocate a local vector for local results
+
+if rank is not 0 {
+    allocate rhs, rowptr, colptr, valptr
+} else {
+    allocate res
+}
+
+Broadcast rhs
+
+if rank is 0 {
+    arrange element count and displs for each process
+}
+
+Scatterv rowptr, colptr and valptr
+
+Do the local computation
+
+if rank is 0 {
+    arrange recv count and displs for each process
+}
+
+Gatherv the y values on res vector.

@@ -1,0 +1,25 @@
+{
+    "configurations": [
+        {
+            "name": "Mac",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/Users/harunsasmaz/mpi/**"
+            ],
+            "defines": [],
+            "macFrameworkPath": [
+                "/Users/harunsasmaz/mpi/**"
+            ],
+            "compilerPath": "/usr/local/bin/gcc-9",
+            "cStandard": "c11",
+            "cppStandard": "c++14",
+            "intelliSenseMode": "gcc-x64",
+            "browse": {
+                "path": [
+                    "/Users/harunsasmaz/mpi/**"
+                ]
+            }
+        }
+    ],
+    "version": 4
+}
