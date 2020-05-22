@@ -1,0 +1,7 @@
+.vscode/
+algo.txt
+build/
+.DS_Store
+small_test1.mtx
+small_test2.mtx
+submit_job.sh
