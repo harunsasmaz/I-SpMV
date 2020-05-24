@@ -1,5 +1,5 @@
-CXX      := g++
-CXXFLAGS := -std=c++14 
+CXX      := mpic++
+CXXFLAGS := -std=c++14
 CXXFLAGS += 
 LDFLAGS  +=  
 BUILD    := ./build
