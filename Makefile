@@ -1,4 +1,4 @@
-CXX      := mpic++
+CXX      := g++
 CXXFLAGS := -std=c++14
 CXXFLAGS += 
 LDFLAGS  +=  

@@ -1,16 +1,17 @@
-#include "stdc++.h"
+#include <bits/stdc++.h>
 #include "../include/common.h"
 #include "../include/matrix.h"
 #include "../include/mmio.h"
 #include <mpi.h>
 
 using namespace std;
+
 #define MASTER 0
 
 int main(int argc, char* argv[]){
 
     int rank, nprocs, nrows, time_steps;
-    int elm_count, my_row;
+    int elm_count, elm_displs;
     int *rowptr, *colptr;
     double *valptr, *local_res, *final_res, *rhs;
 
@@ -56,6 +57,20 @@ int main(int argc, char* argv[]){
         coo2csr_in(matrix.m, matrix.nnz, matrix.csrVal, matrix.csrRowPtr, matrix.csrColIdx);
         printf("Done reading file\n");
 
+        cout << "rows: ";
+        for(int i = 0; i < matrix.m + 1; i++){
+            cout << matrix.csrRowPtr[i] << " ";
+        }
+
+        cout << endl << "cols: ";
+        for(int i = 0; i < matrix.nnz; i++){
+            cout << matrix.csrColIdx[i] << " ";
+        }
+
+        cout << endl << "vals: ";
+        for(int i = 0; i < matrix.nnz; i++){
+            cout << matrix.csrVal[i] << " ";
+        }
         // Allocate and init vector rhs to be ready before brodcasting
         rhs = (double *)malloc(sizeof(double) * matrix.n);
         for(int i = 0; i < matrix.n; i++)
@@ -65,7 +80,7 @@ int main(int argc, char* argv[]){
     // broadcast number of rows/cols in matrix and time steps.
     MPI_Bcast(&nrows, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
     MPI_Bcast(&time_steps, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
-
+    
     // calculate how many row is reserved for each process.
     int row_count = ceil((double)nrows / nprocs);
     // in case of nrows is not divisible by nprocs, last process gets the remaining rows.
@@ -88,36 +103,36 @@ int main(int argc, char* argv[]){
             eDispls[i] = matrix.csrRowPtr[i * row_count];
         }
     } else {
-        // MASTER has already done this allocation.
+        // only master allocated this before, the rest should allocate too.
         rhs = (double*)malloc(sizeof(double) * nrows);
     }
 
     // broadcast rhs vector to all.
     MPI_Bcast(rhs, nrows, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
-
+	
     // send numbers of nonzero elements per process.
     MPI_Scatter(eCounts, 1, MPI_INT, &elm_count, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
-
+    MPI_Scatter(eDispls, 1, MPI_INT, &elm_displs, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+    
     // send row ptr to each process
     rowptr = (int*)malloc(sizeof(int) * (row_count + 1));
     MPI_Scatterv(matrix.csrRowPtr, rowCounts, rowDispls, MPI_INT, 
                     rowptr, row_count, MPI_INT, MASTER, MPI_COMM_WORLD);
     // to avoid collision in scatter, last element is added seperately.
-    rowptr[row_count] = elm_count;
-
+    rowptr[row_count] = elm_count + rowptr[0];
+    
     // send col indexes to each process
     colptr = (int*)malloc(sizeof(int) * elm_count);
     MPI_Scatterv(matrix.csrColIdx, eCounts, eDispls, MPI_INT, 
                     colptr, elm_count, MPI_INT, MASTER, MPI_COMM_WORLD);
-
+                    
     // send val indexes to each process
     valptr = (double*)malloc(sizeof(double) * elm_count);
     MPI_Scatterv(matrix.csrVal, eCounts, eDispls, MPI_DOUBLE, 
                     valptr, elm_count, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
 
-
     // allocate local and final result vectors.
-    local_res = (double*)malloc(sizeof(double) * row_count);
+    local_res = (double*)malloc(sizeof(double) * nrows);
     final_res = (double*)malloc(sizeof(double) * nrows);
 
     clock_t start = clock();
@@ -128,8 +143,8 @@ int main(int argc, char* argv[]){
         {
             local_res[i] = 0.0;
             for(int j = rowptr[i]; j < rowptr[i+1]; j++)
-            {
-                local_res[i] += valptr[j] * rhs[colptr[j]];
+            {   
+                local_res[i] += valptr[j - elm_displs] * rhs[colptr[j - elm_displs]];
             }
         }
 
@@ -139,15 +154,21 @@ int main(int argc, char* argv[]){
         {
             rhs[i] = final_res[i];
         }
-    }
-
+    } 
+    
     clock_t end = clock();
 
     if(rank == MASTER){
         double time_taken = double(end - start) / double(CLOCKS_PER_SEC); 
         cout << "Time taken by program is : " << fixed  
             << time_taken << setprecision(5); 
-        cout << " sec " << endl; 
+        cout << " sec " << endl;
+
+        for(int i = 0; i < nrows; i++){
+            cout << rhs[i] << endl;
+        }
+
+        cout << endl;
     }
 
     MPI_Finalize();

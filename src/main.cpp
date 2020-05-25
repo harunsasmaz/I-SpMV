@@ -80,8 +80,10 @@ int main(int argc, char **argv)
     double time_taken = double(end - start) / double(CLOCKS_PER_SEC); 
     cout << "Time taken by program is : " << fixed  
          << time_taken << setprecision(5); 
-    cout << " sec " << endl;  
-  
+    cout << " sec " << endl; 
+
+    cout << endl;
+
     for(int i = 0; i < matrix.m; i++){
       cout << rhs[i] << endl;
     }
