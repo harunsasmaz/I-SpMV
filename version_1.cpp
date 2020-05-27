@@ -85,8 +85,6 @@ int main(int argc, char* argv[]){
     int row_count = ceil((double)nrows / nprocs);
     // in case of nrows is not divisible by nprocs, last process gets the remaining rows.
     int row_count_last = nrows - ((nprocs - 1) * row_count);
-    if(rank == nprocs - 1)
-        row_count = row_count_last;
 
     // keep which process gets how many rows and its starting index.
     for(int i = 0; i < nprocs - 1; i++){
@@ -95,6 +93,10 @@ int main(int argc, char* argv[]){
     }
     rowCounts[nprocs - 1] = row_count_last;
     rowDispls[nprocs - 1] = (nprocs - 1) * row_count;
+
+    // update the last process' row count.
+    if(rank == nprocs - 1)
+        row_count = row_count_last;
 
     // calculate which process gets how many elements in colptr and valptr.
     if(rank == MASTER){
