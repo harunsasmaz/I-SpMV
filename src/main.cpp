@@ -83,10 +83,6 @@ int main(int argc, char **argv)
     cout << " sec " << endl; 
 
     cout << endl;
-
-    for(int i = 0; i < matrix.m; i++){
-      cout << rhs[i] << endl;
-    }
     
     return EXIT_SUCCESS;
 }

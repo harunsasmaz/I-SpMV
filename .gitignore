@@ -1,5 +1,6 @@
 .vscode/
-algo.txt
 build/
 .DS_Store
 submit_job.sh
+Cube_Coup_dt6/
+Flan_1565/
