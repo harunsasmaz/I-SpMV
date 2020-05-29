@@ -21,3 +21,19 @@ Part II:
 Part III:
 
 > Load balanced row partitioning
+
+Compile:
+
+> First put the version you want to test in src, then call "make"
+
+Test:
+
+> mpirun -np <NUM_PROCS> build/spmv <test_matrix> <iteration_count>
+
+Results:
+
+Provided results are obtained by the matrices at;
+
+> <https://sparse.tamu.edu/Janna/Cube_Coup_dt6>
+
+> <https://sparse.tamu.edu/Janna/Flan_1565>
