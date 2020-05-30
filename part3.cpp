@@ -8,6 +8,28 @@ using namespace std;
 
 #define MASTER 0
 
+MPI_Datatype info_type;
+
+void create_mpi_datatypes(MPI_Datatype *info_type) {
+    MPI_Datatype oldtypes[2];
+    MPI_Aint offsets[2], extent;
+    int blockcounts[2];
+
+    offsets[0] = 0;
+    oldtypes[0] = MPI_INT;
+    blockcounts[0] = 4;
+
+    MPI_Type_create_struct(1, blockcounts, offsets, oldtypes, info_type);
+    MPI_Type_commit(info_type);
+}
+
+typedef struct info_t {
+    int nrows;
+    int steps;
+    int e_count;
+    int e_displs;
+} info_t;
+
 void equal_partition(int nprocs, int nrows, int nnz, int* rows, int* counts, int* displs)
 {   
     // count nnz for each row.
@@ -49,7 +71,6 @@ void equal_partition(int nprocs, int nrows, int nnz, int* rows, int* counts, int
         if(sum + row_elements[i] > low){
             sum = row_elements[i];
             counter++;
-
             counts[counter] = 1;
             displs[counter] = i;
         } else {
@@ -57,7 +78,6 @@ void equal_partition(int nprocs, int nrows, int nnz, int* rows, int* counts, int
             counts[counter]++;
         }
     }
-
 }
 
 
@@ -68,12 +88,17 @@ int main(int argc, char* argv[]){
     int *rowptr, *colptr;
     double *valptr, *local_res, *final_res, *rhs;
 
+    info_t* infos;
+    info_t my_info;
+
     csr_matrix matrix;
     string matrix_name;
 
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
+
+    create_mpi_datatypes(&info_type);
 
     int eCounts[nprocs], eDispls[nprocs], rowCounts[nprocs], rowDispls[nprocs];
 
@@ -111,21 +136,30 @@ int main(int argc, char* argv[]){
         printf("Done reading file\n");
 
         // Allocate and init vector rhs to be ready before brodcasting
-        rhs = (double *)malloc(sizeof(double) * matrix.n);
-        for(int i = 0; i < matrix.n; i++)
-            rhs[i] = (double) 1.0/matrix.n;
+        rhs = (double *)malloc(sizeof(double) * nrows);
+        for(int i = 0; i < nrows; i++)
+            rhs[i] = (double) 1.0/nrows;
         
+        rowDispls[0] = 0;
+        rowCounts[0] = 0;
         equal_partition(nprocs, nrows, matrix.nnz, matrix.csrRowPtr, rowCounts, rowDispls);
-
+        
+        infos = (info_t*)malloc(sizeof(info_t) * nprocs);
         for(int i = 0; i < nprocs; i++){
-            eCounts[i] = matrix.csrRowPtr[rowDispls[i] + rowCounts[i]] - matrix.csrRowPtr[rowDispls[i]];
-            eDispls[i] = matrix.csrRowPtr[rowDispls[i]];
+            infos[i].nrows = nrows;
+            infos[i].steps = time_steps;
+            infos[i].e_count = eCounts[i] = matrix.csrRowPtr[rowDispls[i] + rowCounts[i]] - matrix.csrRowPtr[rowDispls[i]];
+            infos[i].e_displs = eDispls[i] = matrix.csrRowPtr[rowDispls[i]];
         }
+
     }
 
     // broadcast number of rows/cols in matrix and time steps.
-    MPI_Bcast(&nrows, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
-    MPI_Bcast(&time_steps, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+    MPI_Scatter(infos, 1, info_type, &my_info, 1, info_type, MASTER, MPI_COMM_WORLD);
+    nrows = my_info.nrows;
+    time_steps = my_info.steps;
+    elm_count = my_info.e_count;
+    elm_displs = my_info.e_displs;
 
     // broadcast row counts and displs.
     MPI_Bcast(rowCounts, nprocs, MPI_INT, MASTER, MPI_COMM_WORLD);
@@ -134,13 +168,9 @@ int main(int argc, char* argv[]){
     row_count = rowCounts[rank];
     if(rank != MASTER)
         rhs = (double*)malloc(sizeof(double) * nrows);
-    
+        
     // broadcast rhs vector to all.
     MPI_Bcast(rhs, nrows, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
-
-    // send numbers of nonzero elements per process.
-    MPI_Scatter(eCounts, 1, MPI_INT, &elm_count, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
-    MPI_Scatter(eDispls, 1, MPI_INT, &elm_displs, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
     
     // send row ptr to each process
     rowptr = (int*)malloc(sizeof(int) * (row_count + 1));
@@ -170,8 +200,8 @@ int main(int argc, char* argv[]){
         for(int i = 0; i < row_count; i++)
         {
             double a = 0.0;
-            int start = rowptr[i], end = rowptr[i+1];
-            for(int j = start; j < end; j++)
+            int x = rowptr[i], y = rowptr[i+1];
+            for(int j = x; j < y; j++)
             {   
                 a += valptr[j - elm_displs] * rhs[colptr[j - elm_displs]];
             }

@@ -82,6 +82,8 @@ int main(int argc, char **argv)
          << time_taken << setprecision(5); 
     cout << " sec " << endl; 
 
+    for(int i = 0; i < matrix.m; i++)
+      cout << rhs[i] << endl;
     cout << endl;
     
     return EXIT_SUCCESS;

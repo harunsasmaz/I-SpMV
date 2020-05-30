@@ -3,33 +3,11 @@
 #include "../include/matrix.h"
 #include "../include/mmio.h"
 #include <mpi.h>
+#include <omp.h>
 
 using namespace std;
 
 #define MASTER 0
-
-MPI_Datatype info_type;
-
-void create_mpi_datatypes(MPI_Datatype *info_type) {
-    MPI_Datatype oldtypes[2];
-    MPI_Aint offsets[2], extent;
-    int blockcounts[2];
-
-    offsets[0] = 0;
-    oldtypes[0] = MPI_INT;
-    blockcounts[0] = 4;
-
-    MPI_Type_create_struct(1, blockcounts, offsets, oldtypes, info_type);
-    MPI_Type_commit(info_type);
-}
-
-typedef struct info_t {
-    int nrows;
-    int steps;
-    int e_count;
-    int e_displs;
-} info_t;
-
 
 int main(int argc, char* argv[]){
 
@@ -38,17 +16,12 @@ int main(int argc, char* argv[]){
     int *rowptr, *colptr;
     double *valptr, *local_res, *final_res, *rhs;
 
-    info_t* infos;
-    info_t my_info;
-
     csr_matrix matrix;
     string matrix_name;
 
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
-
-    create_mpi_datatypes(&proc_info_type);
 
     int eCounts[nprocs], eDispls[nprocs], rowCounts[nprocs], rowDispls[nprocs];
 
@@ -87,12 +60,13 @@ int main(int argc, char* argv[]){
 
         // Allocate and init vector rhs to be ready before brodcasting
         rhs = (double *)malloc(sizeof(double) * matrix.n);
+
         for(int i = 0; i < matrix.n; i++)
             rhs[i] = (double) 1.0/matrix.n;
         
         row_count = round((double)nrows/nprocs);
         int row_count_last = nrows - (nprocs - 1) * row_count;
-
+    
         // keep which process gets how many rows and its starting index.
         for(int i = 0; i < nprocs - 1; i++){
             rowCounts[i] = row_count;
@@ -101,36 +75,32 @@ int main(int argc, char* argv[]){
         rowCounts[nprocs - 1] = row_count_last;
         rowDispls[nprocs - 1] = (nprocs - 1) * row_count;
 
-        // keep which process gets how many elements and its starting index.
-        infos = (info_t*)malloc(sizeof(info_t) * nprocs);
         for(int i = 0; i < nprocs; i++){
-            infos[i].nrows = nrows;
-            infos[i].steps = time_steps;
-            infos[i].e_count = eCounts[i] = matrix.csrRowPtr[i * row_count + rowCounts[i]] - matrix.csrRowPtr[i * row_count];
-            infos[i].e_displs = eDispls[i] = matrix.csrRowPtr[i * row_count];
+            eCounts[i] = matrix.csrRowPtr[i * row_count + rowCounts[i]] - matrix.csrRowPtr[i * row_count];
+            eDispls[i] = matrix.csrRowPtr[i * row_count];
         }
-
     }
 
     // broadcast number of rows/cols in matrix and time steps.
-    MPI_Scatter(infos, 1, info_type, &my_info, 1, info_type, MASTER, MPI_COMM_WORLD);
-    nrows = my_info.nrows;
-    time_steps = my_info.steps;
-    elm_count = my_info.e_count;
-    elm_displs = my_info.e_displs;
+    MPI_Bcast(&nrows, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+    MPI_Bcast(&time_steps, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
 
-    // broadcast row counts and displs to be used in Allgatherv
+    // broadcast row counts and displs.
     MPI_Bcast(rowCounts, nprocs, MPI_INT, MASTER, MPI_COMM_WORLD);
     MPI_Bcast(rowDispls, nprocs, MPI_INT, MASTER, MPI_COMM_WORLD);
 
-    // processes other than master should allocate rhs and row count.
     if(rank != MASTER){
         rhs = (double*)malloc(sizeof(double) * nrows);
         row_count = rowCounts[rank];
     }
+
     // broadcast rhs vector to all.
     MPI_Bcast(rhs, nrows, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
 
+    // send numbers of nonzero elements per process.
+    MPI_Scatter(eCounts, 1, MPI_INT, &elm_count, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+    MPI_Scatter(eDispls, 1, MPI_INT, &elm_displs, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+    
     // send row ptr to each process
     rowptr = (int*)malloc(sizeof(int) * (row_count + 1));
     MPI_Scatterv(matrix.csrRowPtr, rowCounts, rowDispls, MPI_INT, 
@@ -151,15 +121,18 @@ int main(int argc, char* argv[]){
     // allocate local and final result vectors.
     local_res = (double*)malloc(sizeof(double) * nrows);
     final_res = (double*)malloc(sizeof(double) * nrows);
+    double a;
+    int x,y;
 
     clock_t start = clock();
-
     for(int k = 0; k < time_steps; k++) 
     {   
         for(int i = 0; i < row_count; i++)
         {
-            double a = 0.0;
-            int x = rowptr[i], y = rowptr[i+1];
+            a = 0.0;
+            x = rowptr[i];
+            y = rowptr[i+1];
+            #pragma omp parallel for schedule(dynamic) shared(x,y,elm_displs) reduction(+:a)
             for(int j = x; j < y; j++)
             {   
                 a += valptr[j - elm_displs] * rhs[colptr[j - elm_displs]];
@@ -169,12 +142,12 @@ int main(int argc, char* argv[]){
 
         MPI_Allgatherv(local_res, row_count, MPI_DOUBLE, final_res, rowCounts, rowDispls, MPI_DOUBLE, MPI_COMM_WORLD);
 
+        #pragma omp parallel for
         for(int i = 0; i < nrows; i++)
         {
             rhs[i] = final_res[i];
         }
     } 
-
     clock_t end = clock();
 
     if(rank == MASTER){
@@ -183,8 +156,8 @@ int main(int argc, char* argv[]){
             << time_taken << setprecision(5); 
         cout << " sec " << endl;
 
-        // for(int i = 0; i < nrows; i++)
-        //     cout << rhs[i] << endl;
+        for(int i = 0; i < nrows; i++)
+            cout << rhs[i] << endl;
     }
 
     MPI_Finalize();
