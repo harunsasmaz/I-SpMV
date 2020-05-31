@@ -11,6 +11,7 @@ using namespace std;
 
 MPI_Datatype info_type;
 
+// create an MPI datatype for the struct below.
 void create_mpi_datatypes(MPI_Datatype *info_type) {
     MPI_Datatype oldtypes[2];
     MPI_Aint offsets[2], extent;
@@ -24,6 +25,7 @@ void create_mpi_datatypes(MPI_Datatype *info_type) {
     MPI_Type_commit(info_type);
 }
 
+// each process needs this information, pack them in a struct
 typedef struct info_t {
     int nrows;
     int steps;
@@ -102,7 +104,7 @@ int main(int argc, char* argv[]){
         rowCounts[nprocs - 1] = row_count_last;
         rowDispls[nprocs - 1] = (nprocs - 1) * row_count;
 
-        // keep which process gets how many elements and its starting index.
+        // keep which process gets how many elements from which index and fill needed information.
         infos = (info_t*)malloc(sizeof(info_t) * nprocs);
         for(int i = 0; i < nprocs; i++){
             infos[i].nrows = nrows;
@@ -113,6 +115,7 @@ int main(int argc, char* argv[]){
 
     }
 
+    // scatter needed information to all processes
     MPI_Scatter(infos, 1, info_type, &my_info, 1, info_type, MASTER, MPI_COMM_WORLD);
     nrows = my_info.nrows;
     time_steps = my_info.steps;
@@ -151,8 +154,8 @@ int main(int argc, char* argv[]){
     // allocate local and final result vectors.
     local_res = (double*)malloc(sizeof(double) * nrows);
     final_res = (double*)malloc(sizeof(double) * nrows);
-    double a;
-    int x,y;
+    double a; // temp result of multiplication loop.
+    int x,y; // start and end indexes of multiplication loop.
 
     clock_t start = clock();
     for(int k = 0; k < time_steps; k++) 
@@ -181,18 +184,13 @@ int main(int argc, char* argv[]){
     } 
     clock_t end = clock();
 
-    /* for more precise timing, accumulate elapsed time for
-     * each process and print their average */
-    double times[nprocs];
-    double time_taken = double(end - start) / double(CLOCKS_PER_SEC); 
-    MPI_Gather(&time_taken, 1, MPI_DOUBLE, times, 1, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
-
-
     if(rank == MASTER){
-        double sum = 0.0;
-        cout << "Average time taken by processes is : " << fixed  
-            << accumulate(times, times + nprocs, sum) / nprocs << setprecision(5); 
+        double time_taken = double(end - start) / double(CLOCKS_PER_SEC); 
+        cout << "Time taken by processes is : " << fixed  
+            << time_taken << setprecision(5); 
         cout << " sec " << endl;
+
+        // for debugging the final result.
 
         // for(int i = 0; i < nrows; i++)
         //     cout << rhs[i] << endl;

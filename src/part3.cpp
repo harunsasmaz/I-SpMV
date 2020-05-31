@@ -10,6 +10,7 @@ using namespace std;
 
 MPI_Datatype info_type;
 
+// create an MPI datatype for the struct below.
 void create_mpi_datatypes(MPI_Datatype *info_type) {
     MPI_Datatype oldtypes[2];
     MPI_Aint offsets[2], extent;
@@ -23,6 +24,7 @@ void create_mpi_datatypes(MPI_Datatype *info_type) {
     MPI_Type_commit(info_type);
 }
 
+// each process needs this information, pack them in a struct
 typedef struct info_t {
     int nrows;
     int steps;
@@ -140,10 +142,13 @@ int main(int argc, char* argv[]){
         for(int i = 0; i < nrows; i++)
             rhs[i] = (double) 1.0/nrows;
         
+        // initially set to 0 for safe parameter passing.
         rowDispls[0] = 0;
         rowCounts[0] = 0;
+        // partition rows with load balancing.
         equal_partition(nprocs, nrows, matrix.nnz, matrix.csrRowPtr, rowCounts, rowDispls);
         
+        // keep which process gets how many elements from which index and fill needed information.
         infos = (info_t*)malloc(sizeof(info_t) * nprocs);
         for(int i = 0; i < nprocs; i++){
             infos[i].nrows = nrows;
@@ -154,7 +159,7 @@ int main(int argc, char* argv[]){
 
     }
 
-    // broadcast number of rows/cols in matrix and time steps.
+    // scatter needed information to all processes
     MPI_Scatter(infos, 1, info_type, &my_info, 1, info_type, MASTER, MPI_COMM_WORLD);
     nrows = my_info.nrows;
     time_steps = my_info.steps;
@@ -165,7 +170,9 @@ int main(int argc, char* argv[]){
     MPI_Bcast(rowCounts, nprocs, MPI_INT, MASTER, MPI_COMM_WORLD);
     MPI_Bcast(rowDispls, nprocs, MPI_INT, MASTER, MPI_COMM_WORLD);
 
+    // each process knows how many rows it gets.
     row_count = rowCounts[rank];
+    // only master allocated rhs before, the rest should allocate too.
     if(rank != MASTER)
         rhs = (double*)malloc(sizeof(double) * nrows);
         
@@ -192,15 +199,17 @@ int main(int argc, char* argv[]){
     // allocate local and final result vectors.
     local_res = (double*)malloc(sizeof(double) * nrows);
     final_res = (double*)malloc(sizeof(double) * nrows);
+    double a; // temp result of multiplication loop.
+    int x,y; // start and end indexes of multiplication loop.
 
     clock_t start = clock();
-
     for(int k = 0; k < time_steps; k++) 
     {   
         for(int i = 0; i < row_count; i++)
         {
-            double a = 0.0;
-            int x = rowptr[i], y = rowptr[i+1];
+            a = 0.0;
+            x = rowptr[i];
+            y = rowptr[i+1];
             for(int j = x; j < y; j++)
             {   
                 a += valptr[j - elm_displs] * rhs[colptr[j - elm_displs]];
@@ -215,22 +224,16 @@ int main(int argc, char* argv[]){
             rhs[i] = final_res[i];
         }
     } 
-
     clock_t end = clock();
 
-    /* for more precise timing, accumulate elapsed time for
-     * each process and print their average */
-    double times[nprocs];
-    double time_taken = double(end - start) / double(CLOCKS_PER_SEC); 
-    MPI_Gather(&time_taken, 1, MPI_DOUBLE, times, 1, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
-
-
     if(rank == MASTER){
-        double sum = 0.0;
-        cout << "Average time taken by processes is : " << fixed  
-            << accumulate(times, times + nprocs, sum) / nprocs << setprecision(5); 
+        double time_taken = double(end - start) / double(CLOCKS_PER_SEC); 
+        cout << "Time taken by processes is : " << fixed  
+            << time_taken << setprecision(5); 
         cout << " sec " << endl;
 
+        // for debugging the result: 
+        
         // for(int i = 0; i < nrows; i++)
         //     cout << rhs[i] << endl;
     }
