@@ -48,7 +48,7 @@ int main(int argc, char* argv[]){
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
 
-    create_mpi_datatypes(&proc_info_type);
+    create_mpi_datatypes(&info_type);
 
     int eCounts[nprocs], eDispls[nprocs], rowCounts[nprocs], rowDispls[nprocs];
 
@@ -177,16 +177,30 @@ int main(int argc, char* argv[]){
 
     clock_t end = clock();
 
+    /* for more precise timing, accumulate elapsed time for
+     * each process and print their average */
+    double times[nprocs];
+    double time_taken = double(end - start) / double(CLOCKS_PER_SEC); 
+    MPI_Gather(&time_taken, 1, MPI_DOUBLE, times, 1, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
+
+
     if(rank == MASTER){
-        double time_taken = double(end - start) / double(CLOCKS_PER_SEC); 
-        cout << "Time taken by program is : " << fixed  
-            << time_taken << setprecision(5); 
+        double sum = 0.0;
+        cout << "Average time taken by processes is : " << fixed  
+            << accumulate(times, times + nprocs, sum) / nprocs << setprecision(5); 
         cout << " sec " << endl;
 
         // for(int i = 0; i < nrows; i++)
         //     cout << rhs[i] << endl;
     }
 
+
+    free(rowptr);
+    free(colptr);
+    free(valptr);
+    free(local_res);
+    free(final_res);
+    free(rhs);
     MPI_Finalize();
     return 0;
 }

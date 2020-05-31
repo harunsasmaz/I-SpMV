@@ -3,6 +3,7 @@
 #include "../include/matrix.h"
 #include "../include/mmio.h"
 #include <mpi.h>
+#include <omp.h>
 
 using namespace std;
 
@@ -29,57 +30,6 @@ typedef struct info_t {
     int e_count;
     int e_displs;
 } info_t;
-
-void equal_partition(int nprocs, int nrows, int nnz, int* rows, int* counts, int* displs)
-{   
-    // count nnz for each row.
-    int* row_elements = (int*)malloc(sizeof(int) * nrows);
-    for(int i = 0; i < nrows; i++){
-        row_elements[i] = rows[i + 1] - rows[i];
-    }
-
-    // first find a lower bound nnz for processes
-    // by applying binary search.
-    int low = 0, high = nnz;
-    while(low < high)
-    {   
-        // the range of searching
-        int mid = (low + high) / 2;
-
-        // calculate how many process are needed so that each
-        // process receives up to nnz elements 
-        int sum = 0, need = 0;
-        for(int i = 0; i < nrows; i++){
-            if (sum + row_elements[i] > mid) {
-                sum = row_elements[i];
-                need++;
-            } else {
-                sum += row_elements[i];
-            }
-        }
-
-        // update the searching range.
-        if (need < nprocs)
-            high = mid;
-        else
-            low = mid + 1;
-    }
-
-    // split rows by processes according to lower bound.
-    int sum = 0, counter = 0;
-    for(int i = 0; i < nrows; i++){
-        if(sum + row_elements[i] > low){
-            sum = row_elements[i];
-            counter++;
-            counts[counter] = 1;
-            displs[counter] = i;
-        } else {
-            sum += row_elements[i];
-            counts[counter]++;
-        }
-    }
-}
-
 
 int main(int argc, char* argv[]){
 
@@ -137,38 +87,47 @@ int main(int argc, char* argv[]){
 
         // Allocate and init vector rhs to be ready before brodcasting
         rhs = (double *)malloc(sizeof(double) * nrows);
+
         for(int i = 0; i < nrows; i++)
             rhs[i] = (double) 1.0/nrows;
         
-        rowDispls[0] = 0;
-        rowCounts[0] = 0;
-        equal_partition(nprocs, nrows, matrix.nnz, matrix.csrRowPtr, rowCounts, rowDispls);
-        
+        row_count = round((double)nrows/nprocs);
+        int row_count_last = nrows - (nprocs - 1) * row_count;
+
+        // keep which process gets how many rows and its starting index.
+        for(int i = 0; i < nprocs - 1; i++){
+            rowCounts[i] = row_count;
+            rowDispls[i] = i * row_count;
+        }
+        rowCounts[nprocs - 1] = row_count_last;
+        rowDispls[nprocs - 1] = (nprocs - 1) * row_count;
+
+        // keep which process gets how many elements and its starting index.
         infos = (info_t*)malloc(sizeof(info_t) * nprocs);
         for(int i = 0; i < nprocs; i++){
             infos[i].nrows = nrows;
             infos[i].steps = time_steps;
-            infos[i].e_count = eCounts[i] = matrix.csrRowPtr[rowDispls[i] + rowCounts[i]] - matrix.csrRowPtr[rowDispls[i]];
-            infos[i].e_displs = eDispls[i] = matrix.csrRowPtr[rowDispls[i]];
+            infos[i].e_count = eCounts[i] = matrix.csrRowPtr[i * row_count + rowCounts[i]] - matrix.csrRowPtr[i * row_count];
+            infos[i].e_displs = eDispls[i] = matrix.csrRowPtr[i * row_count];
         }
 
     }
 
-    // broadcast number of rows/cols in matrix and time steps.
     MPI_Scatter(infos, 1, info_type, &my_info, 1, info_type, MASTER, MPI_COMM_WORLD);
     nrows = my_info.nrows;
     time_steps = my_info.steps;
     elm_count = my_info.e_count;
     elm_displs = my_info.e_displs;
 
-    // broadcast row counts and displs.
+    // broadcast row counts and displs to be used in Allgatherv
     MPI_Bcast(rowCounts, nprocs, MPI_INT, MASTER, MPI_COMM_WORLD);
     MPI_Bcast(rowDispls, nprocs, MPI_INT, MASTER, MPI_COMM_WORLD);
 
-    row_count = rowCounts[rank];
-    if(rank != MASTER)
+    // processes other than master should allocate rhs and row count.
+    if(rank != MASTER){
         rhs = (double*)malloc(sizeof(double) * nrows);
-        
+        row_count = rowCounts[rank];
+    }
     // broadcast rhs vector to all.
     MPI_Bcast(rhs, nrows, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
     
@@ -192,15 +151,19 @@ int main(int argc, char* argv[]){
     // allocate local and final result vectors.
     local_res = (double*)malloc(sizeof(double) * nrows);
     final_res = (double*)malloc(sizeof(double) * nrows);
+    double a;
+    int x,y;
 
     clock_t start = clock();
-
     for(int k = 0; k < time_steps; k++) 
     {   
+        #pragma omp parallel for schedule(static) private(a,x,y,k) firstprivate(local_res)
         for(int i = 0; i < row_count; i++)
         {
-            double a = 0.0;
-            int x = rowptr[i], y = rowptr[i+1];
+            a = 0.0;
+            x = rowptr[i];
+            y = rowptr[i+1];
+
             for(int j = x; j < y; j++)
             {   
                 a += valptr[j - elm_displs] * rhs[colptr[j - elm_displs]];
@@ -210,24 +173,38 @@ int main(int argc, char* argv[]){
 
         MPI_Allgatherv(local_res, row_count, MPI_DOUBLE, final_res, rowCounts, rowDispls, MPI_DOUBLE, MPI_COMM_WORLD);
 
+        #pragma omp parallel for schedule(static)
         for(int i = 0; i < nrows; i++)
         {
             rhs[i] = final_res[i];
         }
     } 
-
     clock_t end = clock();
 
+    /* for more precise timing, accumulate elapsed time for
+     * each process and print their average */
+    double times[nprocs];
+    double time_taken = double(end - start) / double(CLOCKS_PER_SEC); 
+    MPI_Gather(&time_taken, 1, MPI_DOUBLE, times, 1, MPI_DOUBLE, MASTER, MPI_COMM_WORLD);
+
+
     if(rank == MASTER){
-        double time_taken = double(end - start) / double(CLOCKS_PER_SEC); 
-        cout << "Time taken by program is : " << fixed  
-            << time_taken << setprecision(5); 
+        double sum = 0.0;
+        cout << "Average time taken by processes is : " << fixed  
+            << accumulate(times, times + nprocs, sum) / nprocs << setprecision(5); 
         cout << " sec " << endl;
 
         // for(int i = 0; i < nrows; i++)
         //     cout << rhs[i] << endl;
     }
 
+
+    free(rowptr);
+    free(colptr);
+    free(valptr);
+    free(local_res);
+    free(final_res);
+    free(rhs);
     MPI_Finalize();
     return 0;
 }
