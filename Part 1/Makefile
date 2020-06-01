@@ -1,6 +1,6 @@
-CXX      := g++
+CXX      := mpic++
 CXXFLAGS := -std=c++14
-CXXFLAGS += 
+CXXFLAGS += -fopenmp
 LDFLAGS  +=  
 BUILD    := ./build
 OBJ_DIR  := $(BUILD)/objects
