@@ -24,11 +24,15 @@ Part III:
 
 Compile:
 
-> First put the version you want to test in src, then call "make"
+> First go to the part you want to test, then call "make"
+
+> You can swap one of the part with serial code and test serial version.
 
 Test:
 
 > mpirun -np <NUM_PROCS> build/spmv <test_matrix> <iteration_count>
+
+> You can also use provided <submit_job.sh> batch file.
 
 Results:
 
